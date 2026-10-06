@@ -1582,7 +1582,7 @@ fm_treehouse_collect_local_states() {  # <calling-state-dir>
     i=$((i + 1))
     known=0
     for existing in "${FM_TREEHOUSE_OWNER_STATES[@]}"; do
-      [ "$existing" != "$home/state" ] || known=1
+      [ "$existing" -ef "$home/state" ] && known=1
     done
     [ "$known" = 1 ] || FM_TREEHOUSE_OWNER_STATES+=("$home/state")
     reg="$home/data/secondmates.md"

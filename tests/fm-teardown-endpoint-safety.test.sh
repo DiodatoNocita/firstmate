@@ -60,13 +60,13 @@ run_case() {  # <case> <id>
     "$TEARDOWN" "$id" --force
 }
 
-run_stale_owner_case() {  # <case> <obsolete-id> <expected-current-id> [without-force]
-  local dir=$1 obsolete=$2 current=$3 authority=${4:-force}
+run_stale_owner_case() {  # <case> <obsolete-id> <expected-current-id> [authority] [home]
+  local dir=$1 obsolete=$2 current=$3 authority=${4:-force} home=${5:-$1/home}
   local -a args
   args=("$obsolete")
   [ "$authority" != force ] || args+=(--force)
   args+=(--retire-stale-owner "$current")
-  FM_HOME="$dir/home" FM_ROOT_OVERRIDE="$ROOT" \
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
   FM_RUNTIME_LOG="$dir/runtime.log" PATH="$dir/fakebin:$PATH" \
     "$TEARDOWN" "${args[@]}"
 }
@@ -678,6 +678,24 @@ SH
   kill "$control" 2>/dev/null || true
   wait "$control" 2>/dev/null || true
   pass "explicit stale-owner retirement removes only the obsolete records and unblocks ordinary owner cleanup"
+}
+
+test_stale_owner_retirement_deduplicates_aliased_local_state() {
+  local dir obsolete=obsolete-aliased-state current=current-aliased-state current_before
+  dir=$(make_stale_owner_collision stale-owner-aliased-state "$obsolete" "$current")
+  ln -s "$dir/home" "$dir/home-alias"
+  current_before=$(git hash-object "$dir/home/state/$current.meta")
+
+  run_stale_owner_case "$dir" "$obsolete" "$current" force "$dir/home-alias" \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "stale-owner retirement counted aliased local state twice: $(cat "$dir/stderr")"
+  assert_absent "$dir/home/state/$obsolete.meta" \
+    "aliased-state stale-owner retirement left the obsolete record"
+  [ "$(git hash-object "$dir/home/state/$current.meta")" = "$current_before" ] \
+    || fail "aliased-state stale-owner retirement changed the current-owner record"
+  assert_present "$dir/worktree/sentinel" \
+    "aliased-state stale-owner retirement changed the shared checkout"
+  pass "stale-owner retirement treats aliased local state directories as one owner set"
 }
 
 test_stale_owner_recovery_requires_explicit_discard_authority() {
@@ -1744,6 +1762,7 @@ test_already_gone_endpoint_still_completes_without_a_refusal
 test_bare_relative_origin_shares_project_lock_with_clone
 test_reused_pool_slot_refuses_before_touching_the_other_task
 test_explicit_stale_owner_retirement_preserves_the_shared_owner
+test_stale_owner_retirement_deduplicates_aliased_local_state
 test_stale_owner_recovery_requires_explicit_discard_authority
 test_stale_owner_structural_evidence_refuses_ambiguity
 test_stale_owner_runtime_evidence_refuses
