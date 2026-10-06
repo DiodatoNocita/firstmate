@@ -170,11 +170,16 @@
 #   root Firstmate home's state directory before slot allocation and holds it through
 #   task metadata publication. Teardown holds that same lock while proving and
 #   returning a slot, so allocation cannot reuse a slot before its owner record
-#   is published. Under that same lock it writes the slot's owner claim, which is
-#   what lets teardown leave a slot reassigned since untouched; bin/fm-wake-lib.sh
-#   owns the claim and bin/fm-teardown.sh owns what it protects. A slot that
-#   cannot be claimed refuses the spawn rather than launching a worker whose slot
-#   could later be released out from under its successor. A spawn that aborts
+#   is published. Treehouse's interactive lease still ends with the worker
+#   process, not the durable task record, so after `treehouse get` resolves a
+#   slot and before Firstmate claims or freshens it, spawn scans this local home
+#   tree's task records plus any extra local home named by the slot claim. A
+#   record that still names the slot refuses reuse until cleanup reconciles it.
+#   Under that same lock spawn writes the slot's owner claim, which is what lets
+#   teardown leave a slot reassigned since untouched; bin/fm-wake-lib.sh owns the
+#   claim and bin/fm-teardown.sh owns what it protects. A slot that cannot be
+#   claimed refuses the spawn rather than launching a worker whose slot could
+#   later be released out from under its successor. A spawn that aborts
 #   while it still holds the allocation lock drops its own claim; an abort after
 #   metadata publication has released that lock leaves the claim in place, and
 #   the next spawn's claim replaces it.
@@ -275,6 +280,10 @@
 #   itself a linked worktree of the project repository still launches. A pane
 #   that never reaches an isolated worktree refuses at the end of that wait,
 #   naming the last path seen and why it was rejected.
+#   A settled Treehouse path is also checked against durable task records before
+#   its claim or branch is changed. Treehouse's process lease can expire while
+#   metadata still owns the slot, and isolation alone cannot distinguish that
+#   stale lease from a free copy.
 #   That placement is proven only at launch. Every ship or scout pane therefore
 #   also receives `export FM_TASK_ID=<task-id>` before the launch command, on
 #   the same channel as GOTMPDIR, and bin/fm-test-run.sh refuses to execute the
@@ -3437,6 +3446,122 @@ validate_spawn_worktree() { # <source> <inspect-target>
   fi
 }
 
+SPAWN_RECORDED_SLOT_OWNER=
+SPAWN_RECORDED_SLOT_META=
+spawn_record_names_treehouse_slot() {  # <meta> <canonical-slot>; 0=yes, 1=no, 2=unsafe
+  local meta=$1 slot=$2 field count path resolved
+  SPAWN_RECORDED_SLOT_OWNER=
+  SPAWN_RECORDED_SLOT_META=
+  [ -f "$meta" ] && [ ! -L "$meta" ] && [ -r "$meta" ] || return 2
+  for field in worktree home; do
+    count=$(LC_ALL=C awk -F= -v key="$field" '$1 == key { count++ } END { print count + 0 }' "$meta" 2>/dev/null) \
+      || return 2
+    [ "$count" -le 1 ] || return 2
+    [ "$count" -eq 1 ] || continue
+    path=$(fm_meta_get "$meta" "$field")
+    [ -n "$path" ] || return 2
+    resolved=$(real_path_or_raw "$path")
+    [ "$resolved" = "$slot" ] || continue
+    SPAWN_RECORDED_SLOT_OWNER=$(basename "$meta" .meta)
+    SPAWN_RECORDED_SLOT_META=$meta
+    return 0
+  done
+  return 1
+}
+
+# Treehouse's interactive acquire is process-leased, while Firstmate task
+# ownership is durable in state/*.meta. Once a worker exits, Treehouse may hand
+# that slot to another spawn even though the old task still owns it in metadata.
+# Inspect the resolved slot under the shared project lock, before replacing its
+# claim or freshening its branch. Any local record that still names the slot
+# refuses reuse; cleanup or the explicit stale-owner retirement must reconcile
+# that record first. The slot claim can name one otherwise-unregistered local
+# home, which is inspected as additional evidence but never becomes a registry.
+spawn_refuse_recorded_treehouse_slot() {  # <worktree> <inspect-target>
+  local worktree=$1 inspect_target=$2 slot state_dir meta claim_home claim_meta known record_rc
+  slot=$(real_path_or_raw "$worktree")
+  fm_treehouse_collect_local_states "$STATE" || exit 1
+  for state_dir in "${FM_TREEHOUSE_OWNER_STATES[@]}"; do
+    [ -d "$state_dir" ] && [ ! -L "$state_dir" ] || {
+      echo "error: cannot inspect Treehouse ownership state at $state_dir; refusing to adopt $worktree; inspect window $inspect_target" >&2
+      exit 1
+    }
+    for meta in "$state_dir"/*.meta; do
+      [ -e "$meta" ] || [ -L "$meta" ] || continue
+      if spawn_record_names_treehouse_slot "$meta" "$slot"; then
+        record_rc=0
+      else
+        record_rc=$?
+      fi
+      case "$record_rc" in
+        0)
+          echo "error: treehouse get returned '$worktree', but task $SPAWN_RECORDED_SLOT_OWNER still records that Treehouse slot in $SPAWN_RECORDED_SLOT_META; refusing before replacing its claim or resetting its checkout. Tear down that task, or use fm-teardown.sh $SPAWN_RECORDED_SLOT_OWNER --force --retire-stale-owner <expected-current-owner> only for a separately proved collision; inspect window $inspect_target" >&2
+          exit 1
+          ;;
+        1) ;;
+        *)
+          echo "error: task ownership evidence is unreadable or ambiguous at $meta; refusing to adopt Treehouse slot $worktree; inspect window $inspect_target" >&2
+          exit 1
+          ;;
+      esac
+    done
+  done
+
+  fm_treehouse_slot_owner_state "$worktree" "$ID"
+  case "$FM_TREEHOUSE_SLOT_OWNER" in
+    mine|other)
+      fm_task_id_path_safe "$FM_TREEHOUSE_SLOT_OWNER_ID" || {
+        echo "error: Treehouse slot $worktree carries an invalid task id in its owner claim; refusing before replacing it or resetting the checkout; inspect window $inspect_target" >&2
+        exit 1
+      }
+      claim_home=$FM_TREEHOUSE_SLOT_OWNER_HOME
+      case "$claim_home" in
+        /*) ;;
+        *)
+          echo "error: Treehouse slot $worktree carries a non-absolute home in its owner claim; refusing before replacing it or resetting the checkout; inspect window $inspect_target" >&2
+          exit 1
+          ;;
+      esac
+      claim_home=$(CDPATH='' cd -- "$claim_home" 2>/dev/null && pwd -P) || {
+        echo "error: Treehouse slot $worktree carries an unavailable home in its owner claim; refusing before replacing it or resetting the checkout; inspect window $inspect_target" >&2
+        exit 1
+      }
+      [ -d "$claim_home/state" ] && [ ! -L "$claim_home/state" ] || {
+        echo "error: Treehouse slot $worktree carries an unsafe home in its owner claim; refusing before replacing it or resetting the checkout; inspect window $inspect_target" >&2
+        exit 1
+      }
+      claim_meta="$claim_home/state/$FM_TREEHOUSE_SLOT_OWNER_ID.meta"
+      known=0
+      for state_dir in "${FM_TREEHOUSE_OWNER_STATES[@]}"; do
+        [ "$claim_meta" != "$state_dir/$FM_TREEHOUSE_SLOT_OWNER_ID.meta" ] || known=1
+      done
+      if [ "$known" -eq 0 ] && { [ -e "$claim_meta" ] || [ -L "$claim_meta" ]; }; then
+        if spawn_record_names_treehouse_slot "$claim_meta" "$slot"; then
+          record_rc=0
+        else
+          record_rc=$?
+        fi
+        case "$record_rc" in
+          0)
+            echo "error: treehouse get returned '$worktree', but task $SPAWN_RECORDED_SLOT_OWNER in the slot claim's local home still records that Treehouse slot; refusing before replacing its claim or resetting its checkout; inspect window $inspect_target" >&2
+            exit 1
+            ;;
+          1) ;;
+          *)
+            echo "error: the Treehouse slot claim points at unsafe ownership evidence $claim_meta; refusing to adopt $worktree; inspect window $inspect_target" >&2
+            exit 1
+            ;;
+        esac
+      fi
+      ;;
+    absent) ;;
+    *)
+      echo "error: Treehouse slot $worktree carries an unreadable or ambiguous owner claim; refusing before replacing it or resetting the checkout; inspect window $inspect_target" >&2
+      exit 1
+      ;;
+  esac
+}
+
 # A pooled slot whose only deviation is a submodule gitlink is stale, not dirty:
 # an earlier refresh moved the superproject and left the submodule checkout on
 # the pin the previous base recorded. The refusal still stands and this gate
@@ -4477,6 +4602,13 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   fi
 
   validate_spawn_worktree "treehouse get" "$T"
+
+  # The Treehouse lease ended with the prior worker process, but its durable
+  # Firstmate record may still own this slot. Refuse before the claim write and
+  # base freshen can adopt or reset a copy cleanup has not released.
+  if fm_treehouse_pool_slot "$PROJ_ABS" "$WT"; then
+    spawn_refuse_recorded_treehouse_slot "$WT" "$T"
+  fi
 
   # Claim the pool slot for this task. The interactive `treehouse get` sent to
   # the pane above records only a process lease (Treehouse's durable
