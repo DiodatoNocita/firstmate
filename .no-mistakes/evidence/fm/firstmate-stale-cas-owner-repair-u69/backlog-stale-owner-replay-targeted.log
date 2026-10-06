@@ -1,0 +1,2 @@
+ok - backend resolution preserves unreadable configuration errors for every caller
+ok - stale-owner retirement stages an atomic, replayable backlog closure for only the obsolete record

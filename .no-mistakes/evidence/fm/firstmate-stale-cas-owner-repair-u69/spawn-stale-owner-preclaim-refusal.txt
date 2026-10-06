@@ -1,0 +1,2 @@
+ok - spawn refuses a Treehouse slot still named by a durable local owner before claim or checkout mutation
+exit=0
