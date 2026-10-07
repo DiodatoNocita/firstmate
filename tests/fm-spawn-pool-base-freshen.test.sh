@@ -824,6 +824,31 @@ test_pool_slot_recorded_owner_refuses_reuse_before_mutation() {
   pass "spawn refuses a Treehouse slot still named by a durable local owner before claim or checkout mutation"
 }
 
+# A dead worker releases Treehouse's process lease before Firstmate's durable
+# record is replaced. The same task can reclaim that exact local record; a
+# different task remains covered by the refusal above.
+test_pool_slot_exact_local_owner_can_reclaim() {
+  local rec id out status
+
+  id='pool-slot-exact-owner-r1'
+  rec=$(make_case slot-exact-owner "$id")
+  read_case_record "$rec"
+  lay_out_as_pool_slot
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  expect_code 0 "$status" "initial exact-owner slot spawn should launch"$'\n'"$out"
+
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  expect_code 0 "$status" "an exact local owner should reclaim its Treehouse slot"$'\n'"$out"
+  assert_contains "$out" "spawned $id" "exact-owner reclaim did not report success"
+  assert_grep "worktree=$POOL_DIR" "$HOME_DIR/state/$id.meta" \
+    "exact-owner reclaim did not retain its Treehouse slot record"
+  grep -Fxq -- "task=$id" "$SLOT_CLAIM" \
+    || fail "exact-owner reclaim did not retain its slot claim: $(cat "$SLOT_CLAIM")"
+  pass "an exact local task owner can reclaim its Treehouse slot"
+}
+
 publish_feature_branch() { # <branch>
   git -C "$CASE_DIR/publisher" checkout --quiet -b "$1"
   printf 'only on %s\n' "$1" > "$CASE_DIR/publisher/feature-only.txt"
@@ -958,6 +983,7 @@ test_scout_base_branch_refused_on_gerrit_forge() {
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
 test_pool_slot_recorded_owner_refuses_reuse_before_mutation
+test_pool_slot_exact_local_owner_can_reclaim
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
 test_named_base_branch_starts_from_that_branch

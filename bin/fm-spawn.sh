@@ -3473,10 +3473,12 @@ spawn_record_names_treehouse_slot() {  # <meta> <canonical-slot>; 0=yes, 1=no, 2
 # ownership is durable in state/*.meta. Once a worker exits, Treehouse may hand
 # that slot to another spawn even though the old task still owns it in metadata.
 # Inspect the resolved slot under the shared project lock, before replacing its
-# claim or freshening its branch. Any local record that still names the slot
-# refuses reuse; cleanup or the explicit stale-owner retirement must reconcile
-# that record first. The slot claim can name one otherwise-unregistered local
-# home, which is inspected as additional evidence but never becomes a registry.
+# claim or freshening its branch. A distinct local record that still names the
+# slot refuses reuse; the current home's exact task record is the task reclaiming
+# its own slot. Cleanup or the explicit stale-owner retirement must reconcile a
+# distinct record first. The slot claim can name one otherwise-unregistered
+# local home, which is inspected as additional evidence but never becomes a
+# registry.
 spawn_refuse_recorded_treehouse_slot() {  # <worktree> <inspect-target>
   local worktree=$1 inspect_target=$2 slot state_dir meta claim_home claim_meta known record_rc
   slot=$(real_path_or_raw "$worktree")
@@ -3495,6 +3497,13 @@ spawn_refuse_recorded_treehouse_slot() {  # <worktree> <inspect-target>
       fi
       case "$record_rc" in
         0)
+          # A task may reclaim its own durable slot after its terminal or host
+          # died. This exception is deliberately limited to this exact state
+          # directory: an equal task name in any other local home remains a
+          # cross-home collision.
+          if [ "$state_dir" = "$STATE" ] && [ "$SPAWN_RECORDED_SLOT_OWNER" = "$ID" ]; then
+            continue
+          fi
           echo "error: treehouse get returned '$worktree', but task $SPAWN_RECORDED_SLOT_OWNER still records that Treehouse slot in $SPAWN_RECORDED_SLOT_META; refusing before replacing its claim or resetting its checkout. Tear down that task, or use fm-teardown.sh $SPAWN_RECORDED_SLOT_OWNER --force --retire-stale-owner <expected-current-owner> only for a separately proved collision; inspect window $inspect_target" >&2
           exit 1
           ;;
