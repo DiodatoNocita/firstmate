@@ -101,6 +101,23 @@ make_stale_owner_collision() {  # <name> <obsolete-id> <current-id>
   printf '%s\n' "$dir"
 }
 
+set_stale_owner_endpoint_gone() {
+  local dir=$1 obsolete=$2
+  cat > "$dir/fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"status --json"*) printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n' ;;
+  *"pane get"*) printf '{"error":{"code":"pane_not_found"}}\n' ;;
+esac
+SH
+  chmod +x "$dir/fakebin/herdr"
+  fm_write_meta "$dir/home/state/$obsolete.meta" \
+    "window=gone-session:w1:p1" "endpoint_task_id=$obsolete" \
+    "worktree=$dir/worktree" "project=$dir/project" "kind=scout" "backend=herdr" \
+    "herdr_session=gone-session" "herdr_workspace_id=w1" \
+    "herdr_tab_id=w1" "herdr_pane_id=w1:p1"
+}
+
 assert_stale_owner_refused_unchanged() {  # <case> <obsolete-id> <current-id> <description>
   local dir=$1 obsolete=$2 current=$3 description=$4 rc old_meta current_meta sentinel
   old_meta=$(git hash-object "$dir/home/state/$obsolete.meta")
@@ -615,6 +632,7 @@ test_reused_pool_slot_refuses_before_touching_the_other_task() {
 test_explicit_stale_owner_retirement_preserves_the_shared_owner() {
   local dir obsolete=obsolete-task current=current-task control current_before head_before branch_before unrelated_head rc
   dir=$(make_stale_owner_collision stale-owner-success "$obsolete" "$current")
+  set_stale_owner_endpoint_gone "$dir" "$obsolete"
   printf 'shared checkout bytes\n' > "$dir/worktree/sentinel"
   mkdir -p "$dir/home/data/$obsolete"
   printf 'preserved findings\n' > "$dir/home/data/$obsolete/report.md"
@@ -683,6 +701,7 @@ SH
 test_stale_owner_retirement_deduplicates_aliased_local_state() {
   local dir obsolete=obsolete-aliased-state current=current-aliased-state current_before
   dir=$(make_stale_owner_collision stale-owner-aliased-state "$obsolete" "$current")
+  set_stale_owner_endpoint_gone "$dir" "$obsolete"
   ln -s "$dir/home" "$dir/home-alias"
   current_before=$(git hash-object "$dir/home/state/$current.meta")
 
@@ -811,7 +830,19 @@ SH
   chmod +x "$dir/fakebin/tmux"
   assert_stale_owner_refused_unchanged "$dir" "$obsolete" "$current" "live obsolete agent"
 
+  dir=$(make_stale_owner_collision stale-owner-tmux-missing "$obsolete" "$current")
+  assert_stale_owner_refused_unchanged "$dir" "$obsolete" "$current" "unprovable tmux missing endpoint"
+  assert_contains "$(cat "$dir/stderr")" "absence cannot be proven" \
+    "tmux-missing refusal did not explain its unproven absence"
+
+  dir=$(make_stale_owner_collision stale-owner-windowless "$obsolete" "$current")
+  perl -ni -e 'print unless /^window=/' "$dir/home/state/$obsolete.meta"
+  assert_stale_owner_refused_unchanged "$dir" "$obsolete" "$current" "windowless obsolete endpoint"
+  assert_contains "$(cat "$dir/stderr")" "has no endpoint" \
+    "windowless refusal did not explain its missing endpoint"
+
   dir=$(make_stale_owner_collision stale-owner-process "$obsolete" "$current")
+  set_stale_owner_endpoint_gone "$dir" "$obsolete"
   cat > "$dir/fakebin/lsof" <<SH
 #!/usr/bin/env bash
 printf 'p424242\nfcwd\nn%s\n' '$(cd "$dir/worktree" && pwd -P)'
@@ -822,6 +853,7 @@ SH
   temp_obsolete="obsolete-tasktmp-$$"
   temp_current="current-tasktmp-$$"
   dir=$(make_stale_owner_collision stale-owner-tasktmp-process "$temp_obsolete" "$temp_current")
+  set_stale_owner_endpoint_gone "$dir" "$temp_obsolete"
   tasktmp="/tmp/fm-$temp_obsolete"
   mkdir -m 700 "$tasktmp"
   printf '%s\n' "$tasktmp" >> "$FM_TEST_CLEANUP_REGISTRY"
@@ -857,6 +889,7 @@ SH
 test_stale_owner_recovery_refuses_changing_evidence() {
   local dir obsolete=obsolete-changing current=current-changing
   dir=$(make_stale_owner_collision stale-owner-changing "$obsolete" "$current")
+  set_stale_owner_endpoint_gone "$dir" "$obsolete"
   cat > "$dir/fakebin/lsof" <<SH
 #!/usr/bin/env bash
 count=0

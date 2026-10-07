@@ -1178,6 +1178,10 @@ fi
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
 T_ORCA=
+if [ "$TEARDOWN_WINDOWLESS_SHAPE" = 1 ] && [ -n "$STALE_OWNER_RECOVERY_ID" ]; then
+  echo "REFUSED: stale-owner retirement for obsolete task $ID and expected current owner $STALE_OWNER_RECOVERY_ID: the obsolete record has no endpoint that can prove its agent absent; nothing was changed" >&2
+  exit 1
+fi
 if [ "$TEARDOWN_WINDOWLESS" = 1 ]; then
   BACKEND=tmux
   T=
@@ -3525,7 +3529,7 @@ stale_owner_evidence_validate() {  # <initial|recheck>
   local current_project current_worktree current_kind current_backend current_remote current_tasktmp
   local obsolete_project_real current_project_real obsolete_slot current_slot current_home_real claim_home_real
   local obsolete_tasktmp_real='' current_tasktmp_real=''
-  local endpoint_state snapshot
+  local endpoint_backend endpoint_target endpoint_state endpoint_absence snapshot
 
   stale_owner_meta_value_once "$META" project 1 || {
     stale_owner_refuse "the obsolete record has unreadable or ambiguous project evidence"
@@ -3673,10 +3677,27 @@ stale_owner_evidence_validate() {  # <initial|recheck>
       ;;
   esac
 
-  if [ "$TEARDOWN_WINDOWLESS" = 1 ]; then
-    endpoint_state=missing
-  else
-    endpoint_state=$(fm_backend_agent_state "$BACKEND" "$T")
+  if ! fm_backend_validate_task_endpoint "$META" "$ID" >/dev/null 2>&1; then
+    stale_owner_refuse "the obsolete endpoint identity is invalid or absent"
+    return 1
+  fi
+  endpoint_backend=$FM_BACKEND_VALIDATED_BACKEND
+  endpoint_target=$FM_BACKEND_VALIDATED_TARGET
+  fm_control_backend_state_verified "$endpoint_backend" || {
+    stale_owner_refuse "the obsolete endpoint has no recovery-grade agent-state classifier"
+    return 1
+  }
+  endpoint_state=$(fm_backend_agent_state "$endpoint_backend" "$endpoint_target")
+  if [ "$endpoint_state" = missing ]; then
+    endpoint_absence=$(fm_control_endpoint_absence_verdict "$endpoint_backend" "$endpoint_target")
+    case "${endpoint_absence%%$'\t'*}" in
+      gone) ;;
+      dead) endpoint_state=dead ;;
+      *)
+        stale_owner_refuse "the obsolete endpoint reads missing, but its absence cannot be proven"
+        return 1
+        ;;
+    esac
   fi
   case "$endpoint_state" in dead|missing) ;; *)
     stale_owner_refuse "the obsolete endpoint reads '$endpoint_state', not confidently agent-free"
