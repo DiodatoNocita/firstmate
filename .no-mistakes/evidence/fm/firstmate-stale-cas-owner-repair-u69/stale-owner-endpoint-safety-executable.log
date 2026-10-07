@@ -1,0 +1,4 @@
+ok - explicit stale-owner retirement removes only the obsolete records and unblocks ordinary owner cleanup
+ok - stale-owner recovery refuses live processes, remote routes, unverified endpoints, and Orca ownership
+ok - stale-owner recovery refuses live processes, remote routes, unverified endpoints, and Orca ownership
+ok - stale-owner recovery refuses wrong owners, non-Treehouse, drifted, cross-project, third-owner, ambiguous, cross-home, and unreadable ownership evidence

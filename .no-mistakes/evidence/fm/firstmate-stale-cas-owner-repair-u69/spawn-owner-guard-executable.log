@@ -1,0 +1,9 @@
+# all fm-spawn-pool-base-freshen tests passed
+ok - spawn refuses a Treehouse slot still named by a durable local owner before claim or checkout mutation
+ok - a claimed owner without a record blocks reuse from scanned and extra homes
+ok - an exact local task owner can reclaim its Treehouse slot
+ok - an exact local task owner with a live endpoint cannot reclaim its slot
+# all fm-spawn-pool-base-freshen tests passed
+ok - an exact local task owner can reclaim its Treehouse slot
+# all fm-spawn-pool-base-freshen tests passed
+ok - an exact local task owner with a live endpoint cannot reclaim its slot

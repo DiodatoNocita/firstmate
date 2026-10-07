@@ -1,0 +1,7 @@
+ok - backend resolution preserves unreadable configuration errors for every caller
+ok - backend resolution preserves environment, project, user, and default precedence
+ok - backlog readers and mutations refuse unresolved backends without touching either backlog
+not ok - captain hold did not report its configuration error (missing: 'tasks-axi backend configuration cannot be read at /private/var/folders/kn/vzd7b49s3772byj32f5s2g700000gn/T/fm-backlog-atomicity.zwvO3M/backend-hold-dangling/home/.tasks.toml')
+--- output ---
+/Users/diodato/.no-mistakes/worktrees/0cd3991fdb26/01M494AZT00KH1NZEDRMA0T6MY/bin/fm-backlog-transition-lib.sh: line 80: /fm-timeout-lib.sh: No such file or directory
+bash: line 1: 83505 Killed: 9               bash tests/fm-backlog-atomicity.test.sh
