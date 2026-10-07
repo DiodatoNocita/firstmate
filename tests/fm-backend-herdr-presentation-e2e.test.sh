@@ -551,7 +551,7 @@ make_project "$RECOVERY_BRAVO_PROJECT_DIR"
 spawn_task anchor "$HOME_DIR" "$PROJECT_DIR" > "$TMP_ROOT/anchor.out" 2> "$TMP_ROOT/anchor.err" \
   || fail "opted-out anchor spawn failed: $(cat "$TMP_ROOT/anchor.err")"
 ANCHOR_META="$HOME_DIR/state/anchor.meta"
-remember_meta_worktree "$ANCHOR_META" >/dev/null
+ANCHOR_WT=$(remember_meta_worktree "$ANCHOR_META")
 FIRSTMATE_WSID=$(grep '^herdr_workspace_id=' "$ANCHOR_META" | cut -d= -f2-)
 [ -n "$FIRSTMATE_WSID" ] || fail "anchor metadata did not record the firstmate workspace"
 
@@ -1214,10 +1214,18 @@ for RESTART_ID in fm-hibit-resume-r1 wheelhouse-healing-r1; do
   PATH="$HERDR_ORIGINAL_PATH" \
     "$HERDR_LAB_HELPER" provision "$HERDR_LAB_SESSION" \
     || fail "could not reprovision the isolated session for $RESTART_ID validation"
-  # Stopping the whole Herdr session also ends the anchor's agent. Its restored
-  # shell remains useful as the durable layout anchor, but its task record no
-  # longer represents a live slot owner and must not poison later slot reuse.
-  rm -f "$ANCHOR_META"
+  # Stopping the whole Herdr session also ends the anchor's agent. Release its
+  # fixture slot before removing the record, so a later fixture does not see
+  # an orphaned durable claim as a safe slot to reuse.
+  if [ -e "$ANCHOR_META" ]; then
+    "$REAL_TREEHOUSE" return --force "$ANCHOR_WT" >/dev/null 2>&1 \
+      || fail "could not release the stopped anchor fixture slot"
+    FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+      bash -c '. "$1"; fm_treehouse_slot_owner_release "$2" "$3"; fm_treehouse_slot_owner_state "$2" "$3"; [ "$FM_TREEHOUSE_SLOT_OWNER" = absent ]' \
+        _ "$ROOT/bin/fm-wake-lib.sh" "$ANCHOR_WT" anchor \
+      || fail "could not release the stopped anchor fixture slot claim"
+    rm -f "$ANCHOR_META"
+  fi
   lab pane get "$OLD_RESTART_PANE" >/dev/null 2>&1 \
     || fail "$RESTART_ID restart did not preserve the projected pane structurally"
   if lab agent get "$OLD_RESTART_PANE" >/dev/null 2>&1; then
