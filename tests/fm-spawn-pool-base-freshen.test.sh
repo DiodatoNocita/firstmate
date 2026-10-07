@@ -824,9 +824,6 @@ test_pool_slot_recorded_owner_refuses_reuse_before_mutation() {
   pass "spawn refuses a Treehouse slot still named by a durable local owner before claim or checkout mutation"
 }
 
-# A dead worker releases Treehouse's process lease before Firstmate's durable
-# record is replaced. The same task can reclaim that exact local record; a
-# different task remains covered by the refusal above.
 test_pool_slot_exact_local_owner_can_reclaim() {
   local rec id out status
 
@@ -838,6 +835,20 @@ test_pool_slot_exact_local_owner_can_reclaim() {
   status=$?
   expect_code 0 "$status" "initial exact-owner slot spawn should launch"$'\n'"$out"
 
+  cat > "$FAKEBIN_DIR/herdr" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"status --json"*) printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n' ;;
+  *"pane get"*) printf '{"error":{"code":"pane_not_found"}}\n' ;;
+esac
+SH
+  chmod +x "$FAKEBIN_DIR/herdr"
+  fm_write_meta "$HOME_DIR/state/$id.meta" \
+    "window=gone-session:w1:p1" "endpoint_task_id=$id" \
+    "worktree=$POOL_DIR" "project=$PROJECT_DIR" "kind=scout" "backend=herdr" \
+    "herdr_session=gone-session" "herdr_workspace_id=w1" \
+    "herdr_tab_id=w1" "herdr_pane_id=w1:p1"
+
   out=$(run_spawn "$id" --scout)
   status=$?
   expect_code 0 "$status" "an exact local owner should reclaim its Treehouse slot"$'\n'"$out"
@@ -847,6 +858,42 @@ test_pool_slot_exact_local_owner_can_reclaim() {
   grep -Fxq -- "task=$id" "$SLOT_CLAIM" \
     || fail "exact-owner reclaim did not retain its slot claim: $(cat "$SLOT_CLAIM")"
   pass "an exact local task owner can reclaim its Treehouse slot"
+}
+
+test_pool_slot_exact_local_owner_refuses_live_endpoint() {
+  local rec id out status before
+
+  id='pool-slot-exact-owner-live-r1'
+  rec=$(make_case slot-exact-owner-live "$id")
+  read_case_record "$rec"
+  lay_out_as_pool_slot
+  cat > "$FAKEBIN_DIR/herdr" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"status --json"*) printf '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}\n' ;;
+  *"pane get"*) printf '{"result":{"pane":{"pane_id":"w1:p1"}}}\n' ;;
+  *"agent get"*) printf '{"result":{"agent":{"agent_status":"working"}}}\n' ;;
+  *"pane process-info"*) printf '{"result":{"type":"pane_process_info","process_info":{"pane_id":"w1:p1","shell_pid":123,"foreground_processes":[{"pid":123,"name":"codex","argv0":"codex","argv":["codex"]}]}}}\n' ;;
+esac
+SH
+  chmod +x "$FAKEBIN_DIR/herdr"
+  fm_write_meta "$HOME_DIR/state/$id.meta" \
+    "window=live-session:w1:p1" "endpoint_task_id=$id" \
+    "worktree=$POOL_DIR" "project=$PROJECT_DIR" "kind=scout" "backend=herdr" \
+    "herdr_session=live-session" "herdr_workspace_id=w1" \
+    "herdr_tab_id=w1" "herdr_pane_id=w1:p1"
+  before=$(git -C "$POOL_DIR" rev-parse HEAD)
+
+  out=$(run_spawn "$id" --scout)
+  status=$?
+  [ "$status" -ne 0 ] || fail "an exact local owner with a live endpoint reclaimed its slot"
+  assert_contains "$out" "cannot be proven agent-free" \
+    "live exact-owner refusal did not explain its endpoint guard"
+  [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
+    || fail "live exact-owner refusal refreshed or reset the shared checkout"
+  [ ! -e "$SLOT_CLAIM" ] && [ ! -L "$SLOT_CLAIM" ] \
+    || fail "live exact-owner refusal wrote a slot claim"
+  pass "an exact local task owner with a live endpoint cannot reclaim its slot"
 }
 
 publish_feature_branch() { # <branch>
@@ -984,6 +1031,7 @@ test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
 test_pool_slot_recorded_owner_refuses_reuse_before_mutation
 test_pool_slot_exact_local_owner_can_reclaim
+test_pool_slot_exact_local_owner_refuses_live_endpoint
 test_linked_spawning_home_rejects_primary_before_refresh
 test_stale_pool_base_refreshes_before_branching
 test_named_base_branch_starts_from_that_branch

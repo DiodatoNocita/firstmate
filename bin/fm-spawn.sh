@@ -3469,6 +3469,23 @@ spawn_record_names_treehouse_slot() {  # <meta> <canonical-slot>; 0=yes, 1=no, 2
   return 1
 }
 
+spawn_recorded_slot_endpoint_is_agent_free() {  # <meta> <task-id>
+  local meta=$1 id=$2 backend target state absence
+  fm_backend_validate_task_endpoint "$meta" "$id" || return 1
+  backend=$FM_BACKEND_VALIDATED_BACKEND
+  target=$FM_BACKEND_VALIDATED_TARGET
+  fm_control_backend_state_verified "$backend" || return 1
+  state=$(fm_backend_agent_state "$backend" "$target")
+  if [ "$state" = missing ]; then
+    absence=$(fm_control_endpoint_absence_verdict "$backend" "$target")
+    case "${absence%%$'\t'*}" in
+      gone|dead) state=dead ;;
+      *) return 1 ;;
+    esac
+  fi
+  [ "$state" = dead ]
+}
+
 # Treehouse's interactive acquire is process-leased, while Firstmate task
 # ownership is durable in state/*.meta. Once a worker exits, Treehouse may hand
 # that slot to another spawn even though the old task still owns it in metadata.
@@ -3497,12 +3514,12 @@ spawn_refuse_recorded_treehouse_slot() {  # <worktree> <inspect-target>
       fi
       case "$record_rc" in
         0)
-          # A task may reclaim its own durable slot after its terminal or host
-          # died. This exception is deliberately limited to this exact state
-          # directory: an equal task name in any other local home remains a
-          # cross-home collision.
           if [ "$state_dir" = "$STATE" ] && [ "$SPAWN_RECORDED_SLOT_OWNER" = "$ID" ]; then
-            continue
+            if spawn_recorded_slot_endpoint_is_agent_free "$SPAWN_RECORDED_SLOT_META" "$ID"; then
+              continue
+            fi
+            echo "error: task $ID still records Treehouse slot '$worktree', but its endpoint cannot be proven agent-free; refusing before replacing its claim or resetting its checkout. Use bin/fm-control.sh $ID relaunch after stopping or recovering the recorded endpoint; inspect window $inspect_target" >&2
+            exit 1
           fi
           echo "error: treehouse get returned '$worktree', but task $SPAWN_RECORDED_SLOT_OWNER still records that Treehouse slot in $SPAWN_RECORDED_SLOT_META; refusing before replacing its claim or resetting its checkout. Tear down that task, or use fm-teardown.sh $SPAWN_RECORDED_SLOT_OWNER --force --retire-stale-owner <expected-current-owner> only for a separately proved collision; inspect window $inspect_target" >&2
           exit 1
