@@ -3497,7 +3497,7 @@ spawn_recorded_slot_endpoint_is_agent_free() {  # <meta> <task-id>
 # local home, which is inspected as additional evidence but never becomes a
 # registry.
 spawn_refuse_recorded_treehouse_slot() {  # <worktree> <inspect-target>
-  local worktree=$1 inspect_target=$2 slot state_dir meta claim_home claim_meta known record_rc
+  local worktree=$1 inspect_target=$2 slot state_dir meta claim_home claim_state claim_meta record_rc
   slot=$(real_path_or_raw "$worktree")
   fm_treehouse_collect_local_states "$STATE" || exit 1
   for state_dir in "${FM_TREEHOUSE_OWNER_STATES[@]}"; do
@@ -3556,29 +3556,36 @@ spawn_refuse_recorded_treehouse_slot() {  # <worktree> <inspect-target>
         echo "error: Treehouse slot $worktree carries an unsafe home in its owner claim; refusing before replacing it or resetting the checkout; inspect window $inspect_target" >&2
         exit 1
       }
-      claim_meta="$claim_home/state/$FM_TREEHOUSE_SLOT_OWNER_ID.meta"
-      known=0
-      for state_dir in "${FM_TREEHOUSE_OWNER_STATES[@]}"; do
-        [ "$claim_meta" != "$state_dir/$FM_TREEHOUSE_SLOT_OWNER_ID.meta" ] || known=1
-      done
-      if [ "$known" -eq 0 ] && { [ -e "$claim_meta" ] || [ -L "$claim_meta" ]; }; then
-        if spawn_record_names_treehouse_slot "$claim_meta" "$slot"; then
-          record_rc=0
-        else
-          record_rc=$?
-        fi
-        case "$record_rc" in
-          0)
+      claim_state=$(CDPATH='' cd -- "$claim_home/state" 2>/dev/null && pwd -P) || exit 1
+      claim_meta="$claim_state/$FM_TREEHOUSE_SLOT_OWNER_ID.meta"
+      [ -f "$claim_meta" ] && [ ! -L "$claim_meta" ] || {
+        echo "error: Treehouse slot $worktree is claimed by task $FM_TREEHOUSE_SLOT_OWNER_ID, but its owner record is absent or unsafe at $claim_meta; refusing before replacing its claim or resetting its checkout; inspect window $inspect_target" >&2
+        exit 1
+      }
+      if spawn_record_names_treehouse_slot "$claim_meta" "$slot"; then
+        record_rc=0
+      else
+        record_rc=$?
+      fi
+      case "$record_rc" in
+        0)
+          if [ "$FM_TREEHOUSE_SLOT_OWNER" = mine ] && [ "$claim_state" = "$(real_path_or_raw "$STATE")" ] \
+            && spawn_recorded_slot_endpoint_is_agent_free "$claim_meta" "$ID"; then
+            :
+          else
             echo "error: treehouse get returned '$worktree', but task $SPAWN_RECORDED_SLOT_OWNER in the slot claim's local home still records that Treehouse slot; refusing before replacing its claim or resetting its checkout; inspect window $inspect_target" >&2
             exit 1
-            ;;
-          1) ;;
-          *)
-            echo "error: the Treehouse slot claim points at unsafe ownership evidence $claim_meta; refusing to adopt $worktree; inspect window $inspect_target" >&2
-            exit 1
-            ;;
-        esac
-      fi
+          fi
+          ;;
+        1)
+          echo "error: Treehouse slot $worktree is claimed by task $FM_TREEHOUSE_SLOT_OWNER_ID, but its owner record at $claim_meta does not name that slot; refusing before replacing its claim or resetting its checkout; inspect window $inspect_target" >&2
+          exit 1
+          ;;
+        *)
+          echo "error: the Treehouse slot claim points at unsafe ownership evidence $claim_meta; refusing to adopt $worktree; inspect window $inspect_target" >&2
+          exit 1
+          ;;
+      esac
       ;;
     absent) ;;
     *)

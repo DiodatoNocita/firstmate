@@ -824,6 +824,39 @@ test_pool_slot_recorded_owner_refuses_reuse_before_mutation() {
   pass "spawn refuses a Treehouse slot still named by a durable local owner before claim or checkout mutation"
 }
 
+test_pool_slot_claimed_owner_requires_a_record() {
+  local rec id owner out status before claim_hash foreign
+
+  for owner in scanned extra; do
+    id="pool-slot-claim-absent-$owner-r1"
+    rec=$(make_case "slot-claim-absent-$owner" "$id")
+    read_case_record "$rec"
+    lay_out_as_pool_slot
+    case "$owner" in
+      scanned) foreign=$HOME_DIR ;;
+      extra)
+        foreign="$CASE_DIR/foreign-home"
+        mkdir -p "$foreign/state"
+        ;;
+    esac
+    printf 'task=pool-slot-missing-owner-r1\nhome=%s\n' "$foreign" > "$SLOT_CLAIM"
+    before=$(git -C "$POOL_DIR" rev-parse HEAD)
+    claim_hash=$(git hash-object "$SLOT_CLAIM")
+
+    out=$(run_spawn "$id" --scout)
+    status=$?
+    [ "$status" -ne 0 ] || fail "spawn replaced an absent $owner claim owner"
+    assert_contains "$out" "owner record is absent or unsafe" \
+      "absent $owner claim owner did not explain its refusal"
+    [ ! -e "$HOME_DIR/state/$id.meta" ] || fail "absent $owner claim owner published task metadata"
+    [ "$(git hash-object "$SLOT_CLAIM")" = "$claim_hash" ] \
+      || fail "absent $owner claim owner replaced the slot claim"
+    [ "$(git -C "$POOL_DIR" rev-parse HEAD)" = "$before" ] \
+      || fail "absent $owner claim owner refreshed or reset the shared checkout"
+  done
+  pass "a claimed owner without a record blocks reuse from scanned and extra homes"
+}
+
 test_pool_slot_exact_local_owner_can_reclaim() {
   local rec id out status
 
@@ -1030,6 +1063,7 @@ test_scout_base_branch_refused_on_gerrit_forge() {
 test_remote_seeded_home_spawns_from_treehouse_pool
 test_pool_slot_claim_follows_the_spawn_outcome
 test_pool_slot_recorded_owner_refuses_reuse_before_mutation
+test_pool_slot_claimed_owner_requires_a_record
 test_pool_slot_exact_local_owner_can_reclaim
 test_pool_slot_exact_local_owner_refuses_live_endpoint
 test_linked_spawning_home_rejects_primary_before_refresh
