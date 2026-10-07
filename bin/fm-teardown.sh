@@ -149,7 +149,9 @@
 # These refusals are not relaxed by --force: --force authorizes discarding THIS
 # task's unlanded work, never another task's live work. Nothing of this task's
 # own is removed by a refusal; reconcile whichever record is wrong and re-run.
-# A legacy collision with no usable slot-owner claim has one explicit recovery:
+# A two-record collision has one explicit recovery, including a legacy collision
+# with no claim and a collision whose validated claim names the expected current
+# owner:
 # `fm-teardown.sh <obsolete> --force --retire-stale-owner <current>`. It locks
 # both same-home records plus the Treehouse project, proves that they are the
 # only two records naming one canonical project slot, requires the obsolete
