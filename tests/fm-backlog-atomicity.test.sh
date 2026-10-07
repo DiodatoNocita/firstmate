@@ -2949,9 +2949,11 @@ test_stale_owner_retirement_stages_crash_safe_backlog_closure() {
   printf '{"worktrees":[{"name":"1","path":"%s"}]}\n' "$slot" \
     > "$case_dir/pool/treehouse-state.json"
   fm_write_meta "$home/state/$obsolete.meta" \
-    "window=firstmate:fm-$obsolete" "endpoint_task_id=$obsolete" \
+    "window=retired-session:p1" "endpoint_task_id=$obsolete" \
     "worktree=$case_dir/wt" "project=$case_dir/project" "kind=scout" \
-    "spawn_gen=stale-owner-old-generation"
+    "spawn_gen=stale-owner-old-generation" "backend=herdr" \
+    "herdr_session=retired-session" "herdr_workspace_id=w1" \
+    "herdr_tab_id=t1" "herdr_pane_id=p1"
   fm_write_meta "$home/state/$current.meta" \
     "window=firstmate:fm-$current" "endpoint_task_id=$current" \
     "worktree=$case_dir/wt" "project=$case_dir/project" "kind=scout" \
@@ -2962,6 +2964,14 @@ case " $* " in *" -d cwd "*) exit 0 ;; esac
 exit 1
 SH
   chmod +x "$case_dir/fakebin/lsof"
+  cat > "$case_dir/fakebin/herdr" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" status --json "*) printf '%s\n' '{"client":{"version":"0.7.1","protocol":14},"server":{"running":true}}' ;;
+  *" pane get "*) printf '%s\n' '{"error":{"code":"pane_not_found"}}' ;;
+esac
+SH
+  chmod +x "$case_dir/fakebin/herdr"
   current_hash=$(git hash-object "$home/state/$current.meta")
   marker="$home/state/$obsolete.backlog-close"
   real_tasks=$(command -v tasks-axi)
